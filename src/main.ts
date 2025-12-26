@@ -12,7 +12,13 @@ import * as THREE from "three";
 import gsap from "gsap";
 
 import "./style.css";
-import { OrbitControls } from "three/examples/jsm/Addons.js";
+import {
+  CSS3DObject,
+  CSS3DRenderer,
+  GLTFLoader,
+  OrbitControls,
+} from "three/examples/jsm/Addons.js";
+import { degToRad } from "three/src/math/MathUtils.js";
 import GUI from "lil-gui";
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -22,9 +28,30 @@ import GUI from "lil-gui";
 const gui = new GUI();
 gui.hide();
 
+// ─── 🔹 Loading manager ─────────────
+// ──────────────────────────────────────────────────────────────────
+const loadingScreen = document.getElementById("loading") as HTMLDivElement;
+const loadingManager = new THREE.LoadingManager(
+  // onLoad
+  () => {
+    gsap.to(loadingScreen, {
+      opacity: 0,
+      duration: 1,
+      onComplete: () => {
+        loadingScreen.style.display = "none";
+      },
+    });
+  }
+  // onProgress
+  // (_url, loaded, total) => {
+  //   const progress = (loaded / total) * 100;
+  // }
+);
+
 // ─── 🔹 Texture loader ─────────────
 // ──────────────────────────────────────────────────────────────────
-const textureLoader = new THREE.TextureLoader();
+const textureLoader = new THREE.TextureLoader(loadingManager);
+const gltfLoader = new GLTFLoader(loadingManager);
 
 // ─── 🔹 Canvas ─────────────
 // ──────────────────────────────────────────────────────────────────
@@ -41,10 +68,17 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
+// ─── 🔹 CSS Renderer ─────────────
+// ──────────────────────────────────────────────────────────────────
+const cssRendererContainer = document.querySelector("#css-renderer") as HTMLDivElement;
+const domRenderer = new CSS3DRenderer();
+domRenderer.setSize(window.innerWidth, window.innerHeight);
+cssRendererContainer.appendChild(domRenderer.domElement);
+
 // ─── 🔹 Camera ─────────────
 // ──────────────────────────────────────────────────────────────────
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight);
-camera.position.set(0, 0, 1);
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight);
+camera.position.set(10, 20, 25);
 
 const orbitControl = new OrbitControls(camera, canvas);
 orbitControl.enableDamping = true;
@@ -61,10 +95,10 @@ const starsGeometry = new THREE.BufferGeometry();
 const starsCount = 5000;
 const positions = new Float32Array(starsCount * 3);
 const colors = new Float32Array(starsCount * 3);
-const minRadius = 50;
+const minRadius = 100;
 const maxRadius = 200;
 const starsMaterial = new THREE.PointsMaterial({
-  size: 1.5,
+  size: 3.5,
   sizeAttenuation: true,
   vertexColors: true,
   transparent: true,
@@ -116,6 +150,110 @@ starsGeometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 const starfield = new THREE.Points(starsGeometry, starsMaterial);
 
 scene.add(starfield);
+
+// ─── 🔹 Home  ─────────────
+// ──────────────────────────────────────────────────────────────────
+const homeDiv = document.createElement("div");
+homeDiv.className = "home";
+homeDiv.innerHTML = `
+  <h1>Soheyl Ashena</h1>
+  <h2>Frontend Developer</h2>
+`;
+
+const homeObject = new CSS3DObject(homeDiv);
+homeObject.position.set(0, 0, -10);
+homeObject.scale.set(0.01, 0.01, 0.01);
+
+// scene.add(homeObject);
+
+// ─── 🔹 Fantasy planet ─────────────
+// ──────────────────────────────────────────────────────────────────
+gltfLoader.load("/fantasy-planet.glb", (object) => {
+  const planet = object.scene;
+  console.log(planet);
+  planet.scale.set(20, 20, 20);
+  planet.position.set(0, -10, 0);
+
+  scene.add(planet);
+});
+
+// ─── 🔹 Contact ─────────────
+// ──────────────────────────────────────────────────────────────────
+
+// ─── 🔹 Projects ─────────────
+// ──────────────────────────────────────────────────────────────────
+
+// ─── 🔹 Skills ─────────────
+// ──────────────────────────────────────────────────────────────────
+const skillsGroup = new THREE.Group();
+// scene.add(skillsGroup);
+
+const skillsData = [
+  { texture: textureLoader.load("/html.png"), color: "red" },
+  { texture: textureLoader.load("/css.png"), color: "blue" },
+  { texture: textureLoader.load("/js.png"), color: "yellow" },
+  { texture: textureLoader.load("/typescript.png"), color: "blue" },
+  { texture: textureLoader.load("/three.png"), color: "white" },
+  { texture: textureLoader.load("/react.png"), color: "blue" },
+  { texture: textureLoader.load("/next-js.png"), color: "white" },
+  { texture: textureLoader.load("/tailwind.png"), color: "cyan" },
+  { texture: textureLoader.load("/sass.jpg"), color: "magenta" },
+];
+
+gltfLoader.load("/skill-ball.glb", (loadedObject) => {
+  skillsData.forEach((item, index) => {
+    item.texture.colorSpace = THREE.SRGBColorSpace;
+    item.texture.wrapS = THREE.RepeatWrapping;
+    item.texture.repeat.x = -1;
+    item.texture.offset.x = 1;
+
+    const skillBall = loadedObject.scene.clone();
+    const body = skillBall.children[0] as THREE.Mesh;
+    const blades = skillBall.children[1] as THREE.Mesh;
+    const screen = skillBall.children[2] as THREE.Mesh;
+
+    screen.rotation.x = degToRad(-90);
+
+    body.material = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.5,
+      metalness: 1,
+    });
+
+    blades.material = new THREE.MeshStandardMaterial({
+      color: item.color,
+      roughness: 1,
+    });
+
+    screen.material = new THREE.MeshBasicMaterial({ map: item.texture });
+
+    const distance = 2.5;
+    const breakpoint = 3;
+    const col = index % breakpoint;
+    const row = Math.floor(index / breakpoint);
+    skillBall.position.z = -col * distance;
+    skillBall.position.y = -row * distance;
+
+    gsap.to(body.rotation, {
+      x: degToRad(360),
+      repeat: -1,
+      ease: "none",
+      duration: 20,
+    });
+    gsap.to(blades.rotation, {
+      x: degToRad(-360),
+      repeat: -1,
+      ease: "none",
+      duration: 20,
+    });
+
+    skillsGroup.add(skillBall);
+  });
+
+  skillsGroup.rotation.y = Math.PI;
+  centerObject(skillsGroup);
+  skillsGroup.position.x = 10;
+});
 
 // ─── 🔹 Galaxy ─────────────
 // ──────────────────────────────────────────────────────────────────
@@ -389,10 +527,66 @@ galaxyConfigs.forEach((cfg) => {
 
 galaxyConfigs.forEach((cfg) => generateGalaxy(cfg));
 
+// ─── 🔹 UFO ─────────────
+// ──────────────────────────────────────────────────────────────────
+gltfLoader.load("/ufo.glb", (object) => {
+  const ufoGroup = object.scene;
+  const ufoModel = ufoGroup.children[0];
+
+  ufoModel.scale.set(0.04, 0.04, 0.04);
+
+  ufoModel.position.z = -25;
+  ufoModel.rotation.x = degToRad(45);
+  gsap.to(ufoModel.rotation, { y: Math.PI * 2, repeat: -1, ease: "linear", duration: 2 });
+  gsap.to(ufoModel.rotation, {
+    x: degToRad(-45),
+    repeat: -1,
+    yoyo: true,
+    ease: "power1.inOut",
+    duration: 6,
+  });
+
+  ufoGroup.rotation.x = degToRad(25);
+  gsap.to(ufoGroup.rotation, { y: -Math.PI * 2, repeat: -1, ease: "linear", duration: 10 });
+
+  scene.add(ufoGroup);
+});
+
+// ─── 🔹 Axis Helper ─────────────
+// ──────────────────────────────────────────────────────────────────
+// const axisHelper = new THREE.AxesHelper(1);
+// scene.add(axisHelper);
+
+// ─── 🔹 lights ─────────────
+// ──────────────────────────────────────────────────────────────────
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
+scene.add(ambientLight);
+
+const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+directionalLight.position.set(5, 5, -5);
+scene.add(directionalLight);
+
+// ─── 🔹 Mouse damping ─────────────
+// ──────────────────────────────────────────────────────────────────
+const mousePositions = { x: 0, y: 0 };
+// const baseCameraPosition = { x: camera.position.x, y: camera.position.y };
+
+window.addEventListener("mousemove", (event) => {
+  mousePositions.x = event.clientX / window.innerWidth - 0.5;
+  mousePositions.y = event.clientY / window.innerHeight - 0.5;
+
+  // uncomment to enable camera movement with mouse
+  // gsap.to(camera.position, {
+  //   x: baseCameraPosition.x - mousePositions.x,
+  //   y: baseCameraPosition.y + mousePositions.y,
+  // });
+});
+
 // ─── 🔹 Animation loop ─────────────
 // ──────────────────────────────────────────────────────────────────
 gsap.ticker.add(() => {
   renderer.render(scene, camera);
+  domRenderer.render(scene, camera);
   orbitControl.update();
 });
 
@@ -406,4 +600,35 @@ window.addEventListener("resize", () => {
   // Update renderer
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+  // Update CSS renderer
+  domRenderer.setSize(window.innerWidth, window.innerHeight);
 });
+
+// ─── 🔹 Utilities ─────────────
+// ──────────────────────────────────────────────────────────────────
+function centerObject(object: THREE.Object3D) {
+  const box = new THREE.Box3().setFromObject(object);
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  object.position.sub(center);
+}
+
+// function poseGrid(array: THREE.Object3D[], breakpoint: number, distance: number) {
+//   return array.map((item, index) => {
+//     const col = index % breakpoint;
+//     const row = Math.floor(index / breakpoint);
+//     item.position.z = col * distance;
+//     item.position.y = -row * distance;
+//   });
+// }
+
+// function alignHtmlToObject3D(object: THREE.Object3D, camera: THREE.Camera, elem: HTMLElement) {
+//   const tempV = new THREE.Vector3();
+//   object.updateWorldMatrix(true, false);
+//   object.getWorldPosition(tempV);
+//   tempV.project(camera);
+//   const x = (tempV.x * 0.5 + 0.5) * window.innerWidth;
+//   const y = (tempV.y * -0.5 + 0.5) * window.innerHeight;
+//   elem.style.transform = `translate(-50%, -50%) translate(${x}px,${y}px)`;
+// }
