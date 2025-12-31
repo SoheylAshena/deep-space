@@ -12,11 +12,11 @@
   "devDependencies": {
     "@types/three-nebula": "^10.0.5",
     "typescript": "~5.8.3",
-    "vite": "^7.2.4"
+    "vite": "^7.3.0"
   },
   "dependencies": {
     "@types/three": "^0.180.0",
-    "gsap": "^3.13.0",
+    "gsap": "^3.14.2",
     "lil-gui": "^0.20.0",
     "three": "^0.180.0",
     "three-nebula": "^10.0.3"

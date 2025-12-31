@@ -30,23 +30,22 @@ gui.hide();
 
 // ─── 🔹 Loading manager ─────────────
 // ──────────────────────────────────────────────────────────────────
-const loadingScreen = document.getElementById("loading") as HTMLDivElement;
-const loadingManager = new THREE.LoadingManager(
-  // onLoad
-  () => {
-    gsap.to(loadingScreen, {
-      opacity: 0,
-      duration: 1,
-      onComplete: () => {
-        loadingScreen.style.display = "none";
-      },
-    });
-  }
-  // onProgress
-  // (_url, loaded, total) => {
-  //   const progress = (loaded / total) * 100;
-  // }
-);
+// const loadingScreen = document.getElementById("loading") as HTMLDivElement;
+const loadingManager = new THREE.LoadingManager();
+// onLoad
+// () => {
+//   gsap.to(loadingScreen, {
+//     opacity: 0,
+//     duration: 1,
+//     onComplete: () => {
+//       loadingScreen.style.display = "none";
+//     },
+//   });
+// }
+// onProgress
+// (_url, loaded, total) => {
+//   const progress = (loaded / total) * 100;
+// }
 
 // ─── 🔹 Texture loader ─────────────
 // ──────────────────────────────────────────────────────────────────
@@ -95,10 +94,10 @@ const starsGeometry = new THREE.BufferGeometry();
 const starsCount = 5000;
 const positions = new Float32Array(starsCount * 3);
 const colors = new Float32Array(starsCount * 3);
-const minRadius = 100;
-const maxRadius = 200;
+const minRadius = 500;
+const maxRadius = 900;
 const starsMaterial = new THREE.PointsMaterial({
-  size: 3.5,
+  size: 15,
   sizeAttenuation: true,
   vertexColors: true,
   transparent: true,
@@ -169,12 +168,16 @@ homeObject.scale.set(0.01, 0.01, 0.01);
 // ─── 🔹 Fantasy planet ─────────────
 // ──────────────────────────────────────────────────────────────────
 gltfLoader.load("/fantasy-planet.glb", (object) => {
-  const planet = object.scene;
-  console.log(planet);
-  planet.scale.set(20, 20, 20);
-  planet.position.set(0, -10, 0);
+  const fantasy = object.scene;
+  const planet = fantasy.children[0].children[0];
 
-  scene.add(planet);
+  fantasy.scale.set(20, 20, 20);
+  fantasy.position.set(0, -10, 0);
+
+  gsap.to(planet.rotation, { y: Math.PI * 2, repeat: -1, ease: "linear", duration: 60 });
+
+  console.log(fantasy);
+  scene.add(fantasy);
 });
 
 // ─── 🔹 Contact ─────────────
@@ -186,7 +189,7 @@ gltfLoader.load("/fantasy-planet.glb", (object) => {
 // ─── 🔹 Skills ─────────────
 // ──────────────────────────────────────────────────────────────────
 const skillsGroup = new THREE.Group();
-// scene.add(skillsGroup);
+scene.add(skillsGroup);
 
 const skillsData = [
   { texture: textureLoader.load("/html.png"), color: "red" },
@@ -252,7 +255,7 @@ gltfLoader.load("/skill-ball.glb", (loadedObject) => {
 
   skillsGroup.rotation.y = Math.PI;
   centerObject(skillsGroup);
-  skillsGroup.position.x = 10;
+  skillsGroup.position.x = 20;
 });
 
 // ─── 🔹 Galaxy ─────────────
@@ -371,10 +374,8 @@ uniform float uSize;
 uniform float uPoseX;
 uniform float uPoseY;
 uniform float uPoseZ;
-
 attribute vec3 aRandomness;
 attribute float aScale;
-
 varying vec3 vColor;
 
 void main()
@@ -400,9 +401,6 @@ void main()
     modelPosition.y += uPoseY;
     modelPosition.z += uPoseZ;
     
-
-    
-
     vec4 viewPosition = viewMatrix * modelPosition;
     vec4 projectedPosition = projectionMatrix * viewPosition;
     gl_Position = projectedPosition;
@@ -422,15 +420,15 @@ void main()
 
 void main()
 {
-    // Disc
-    float strength = distance(gl_PointCoord, vec2(0.5));
-    strength = step(0.5, strength);
-    strength = 1.0 - strength;
-
-    // // Diffuse point
+    // // Disc
     // float strength = distance(gl_PointCoord, vec2(0.5));
-    // strength *= 2.0;
+    // strength = step(0.5, strength);
     // strength = 1.0 - strength;
+
+    // Diffuse point
+    float strength = distance(gl_PointCoord, vec2(0.5));
+    strength *= 2.0;
+    strength = 1.0 - strength;
 
     // // Light point
     // float strength = distance(gl_PointCoord, vec2(0.5));
@@ -552,14 +550,9 @@ gltfLoader.load("/ufo.glb", (object) => {
   scene.add(ufoGroup);
 });
 
-// ─── 🔹 Axis Helper ─────────────
-// ──────────────────────────────────────────────────────────────────
-// const axisHelper = new THREE.AxesHelper(1);
-// scene.add(axisHelper);
-
 // ─── 🔹 lights ─────────────
 // ──────────────────────────────────────────────────────────────────
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
+const ambientLight = new THREE.AmbientLight(0xffffff, 1);
 scene.add(ambientLight);
 
 const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
