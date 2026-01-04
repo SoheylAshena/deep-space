@@ -147,6 +147,9 @@ const scene = new THREE.Scene();
 let player: THREE.Object3D;
 let playerMixer: THREE.AnimationMixer;
 
+const cameraCollisionRaycaster = new THREE.Raycaster();
+const cameraCollisionObjects: THREE.Object3D[] = [];
+
 gltfLoader.load("/robi.glb", (object) => {
   console.log(object);
 
@@ -158,6 +161,7 @@ gltfLoader.load("/robi.glb", (object) => {
     idle.play();
   }
 
+  player.position.set(5, 5, 0);
   player.scale.set(3, 3, 3);
   scene.add(player);
 });
@@ -176,18 +180,18 @@ const moveSpeed = 10;
 const sprintMultiplier = 1.8;
 
 const gravity = -30;
-const jumpForce = 12;
+const jumpForce = 15;
 
 let verticalVelocity = 0;
 let isGrounded = false;
 
-const respawnPosition = new THREE.Vector3(0, 5, 0);
+const respawnPosition = new THREE.Vector3(5, 5, 0);
 const fallRespawnY = -20;
 const maxAirTime = 2.5;
 let airTime = 0;
 
 const groundRaycaster = new THREE.Raycaster();
-const groundCheckDistance = 1.1;
+const groundCheckDistance = 0.5;
 const groundObjects: THREE.Object3D[] = [];
 
 const wallRaycaster = new THREE.Raycaster();
@@ -195,8 +199,13 @@ const playerRadius = 0.5;
 const wallObjects: THREE.Object3D[] = [];
 
 const clock = new THREE.Clock();
+const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 renderer.domElement.addEventListener("click", () => {
+  if (isMobile) {
+    requestfullscreen(renderer.domElement);
+    return;
+  }
   renderer.domElement.requestPointerLock();
 });
 
@@ -209,7 +218,6 @@ document.addEventListener("mousemove", (e) => {
   pitch = THREE.MathUtils.clamp(pitch, -Math.PI / 3, Math.PI / 3);
 });
 
-const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 let leftTouchId: number | null = null;
 let rightTouchId: number | null = null;
 
@@ -226,13 +234,15 @@ window.addEventListener("touchstart", (e) => {
     if (t.clientX < window.innerWidth * 0.5 && leftTouchId === null) {
       leftTouchId = t.identifier;
       leftStart.set(t.clientX, t.clientY);
+      leftDelta.set(0, 0);
     } else if (rightTouchId === null) {
       rightTouchId = t.identifier;
       rightStart.set(t.clientX, t.clientY);
+      rightDelta.set(0, 0);
     }
   }
 
-  mobileJump = e.touches.length === 2;
+  mobileJump = e.touches.length >= 2;
   mobileSprint = e.touches.length >= 3;
 });
 
@@ -241,6 +251,7 @@ window.addEventListener("touchmove", (e) => {
     if (t.identifier === leftTouchId) {
       leftDelta.set(t.clientX - leftStart.x, t.clientY - leftStart.y);
     }
+
     if (t.identifier === rightTouchId) {
       rightDelta.set(t.clientX - rightStart.x, t.clientY - rightStart.y);
     }
@@ -253,17 +264,27 @@ window.addEventListener("touchend", (e) => {
       leftTouchId = null;
       leftDelta.set(0, 0);
     }
+
     if (t.identifier === rightTouchId) {
       rightTouchId = null;
       rightDelta.set(0, 0);
     }
   }
 
-  mobileJump = false;
-  mobileSprint = false;
+  mobileJump = e.touches.length >= 2;
+  mobileSprint = e.touches.length >= 3;
 });
 
+// const _dir = new THREE.Vector3();
+// const _moveStep = new THREE.Vector3();
+// const _wallOrigin = new THREE.Vector3();
+// const _wallDir = new THREE.Vector3();
+// const _camOffset = new THREE.Vector3();
+// const _camTarget = new THREE.Vector3();
+
 function updateThirdPersonController(delta: number) {
+  delta = Math.min(delta, 0.033); // cap at ~30 FPS
+
   // ===== GROUND CHECK =====
   groundRaycaster.set(player.position, new THREE.Vector3(0, -1, 0));
   const hits = groundRaycaster.intersectObjects(groundObjects, true);
@@ -274,7 +295,8 @@ function updateThirdPersonController(delta: number) {
     airTime = 0;
     if (verticalVelocity < 0) {
       verticalVelocity = 0;
-      player.position.y = hits[0].point.y + groundCheckDistance - 0.01;
+      const targetY = hits[0].point.y + groundCheckDistance;
+      player.position.y = THREE.MathUtils.lerp(player.position.y, targetY, 0.25);
     }
   } else {
     airTime += delta;
@@ -325,7 +347,7 @@ function updateThirdPersonController(delta: number) {
 
     // Horizontal wall collision check
     wallRaycaster.set(
-      player.position.clone().add(new THREE.Vector3(0, 1, 0)), // chest height
+      player.position.clone().add(new THREE.Vector3(0, 0.5, 0)), // chest height
       moveStep.clone().normalize()
     );
 
@@ -348,7 +370,8 @@ function updateThirdPersonController(delta: number) {
       }
     }
 
-    player.rotation.y = Math.atan2(direction.x, direction.z);
+    const targetRot = Math.atan2(direction.x, direction.z);
+    player.rotation.y = THREE.MathUtils.lerp(player.rotation.y, targetRot, delta * 10);
   }
 
   // ===== MOBILE CAMERA LOOK =====
@@ -362,8 +385,19 @@ function updateThirdPersonController(delta: number) {
   const camRot = new THREE.Euler(pitch, yaw, 0, "YXZ");
   const offset = cameraOffset.clone().applyEuler(camRot);
   const target = player.position.clone().add(cameraTargetOffset);
+  let finalOffset = offset.clone();
 
-  camera.position.copy(target).add(offset);
+  // Check for collisions along camera ray
+  cameraCollisionRaycaster.set(target, offset.clone().normalize());
+  const cameraHits = cameraCollisionRaycaster.intersectObjects(cameraCollisionObjects, true);
+
+  if (cameraHits.length > 0 && cameraHits[0].distance < offset.length()) {
+    // Camera would collide, move it closer to the player
+    const safeDist = Math.max(cameraHits[0].distance - 0.5, 1);
+    finalOffset.lerp(offset.normalize().multiplyScalar(safeDist), 0.2);
+  }
+
+  camera.position.copy(target).add(finalOffset);
   camera.lookAt(target);
 }
 
@@ -494,6 +528,7 @@ gltfLoader.load("/fantasy-planet.glb", (object) => {
 
   groundObjects.push(fantasy);
   wallObjects.push(fantasy);
+  cameraCollisionObjects.push(fantasy);
   scene.add(fantasy);
 });
 
@@ -907,9 +942,19 @@ scene.add(ambientLight);
 // ──────────────────────────────────────────────────────────────────
 gsap.ticker.add(() => {
   renderer.render(scene, camera);
-  const delta = clock.getDelta();
+  let delta = clock.getDelta();
+  delta = Math.min(delta, 0.033); // max ~30 FPS step
+
   updateThirdPersonController(delta);
   if (playerMixer) playerMixer.update(delta);
+
+  // Dead zone
+  if (leftDelta.length() < 6) leftDelta.set(0, 0);
+  if (rightDelta.length() < 6) rightDelta.set(0, 0);
+
+  // Damping (smooth decay)
+  leftDelta.multiplyScalar(0.85);
+  rightDelta.multiplyScalar(0.85);
 
   // domRenderer.render(scene, camera);
 });
@@ -950,6 +995,14 @@ function centerObject(object: THREE.Object3D) {
   const center = new THREE.Vector3();
   box.getCenter(center);
   object.position.sub(center);
+}
+
+function requestfullscreen(element: HTMLCanvasElement) {
+  if (element.requestFullscreen) {
+    element.requestFullscreen();
+  } else if ((element as any).webkitRequestFullscreen) {
+    (element as any).webkitRequestFullscreen();
+  }
 }
 
 // function poseLikeGrid(array: THREE.Object3D[], breakpoint: number, distance: number) {
