@@ -132,6 +132,61 @@ const scene = new THREE.Scene();
  ************************************************************
  ************************************************************/
 
+// ─── 🔊 Audio Setup ─────────────────────────────────────────────
+const SPRINT_VOLUME = 1.0;
+const IDLE_VOLUME = 0.0;
+const SPRINT_VOLUME_LERP = 5; // higher = faster response
+
+const audioListener = new THREE.AudioListener();
+camera.add(audioListener);
+
+const audioLoader = new THREE.AudioLoader();
+
+// Background music
+const bgMusic = new THREE.Audio(audioListener);
+
+audioLoader.load("/sounds/ambient.mp3", (buffer) => {
+  bgMusic.setBuffer(buffer);
+  bgMusic.setLoop(true);
+  bgMusic.setVolume(0.05);
+});
+
+const startAudio = () => {
+  if (!bgMusic.isPlaying) {
+    bgMusic.play();
+    footstepSound.play();
+    sprintSound.play();
+  }
+  window.removeEventListener("click", startAudio);
+  window.removeEventListener("touchstart", startAudio);
+};
+
+window.addEventListener("click", startAudio);
+window.addEventListener("touchstart", startAudio);
+
+const jumpSound = new THREE.Audio(audioListener);
+const sprintSound = new THREE.Audio(audioListener);
+const footstepSound = new THREE.Audio(audioListener);
+
+audioLoader.load("/sounds/forceField_001.ogg", (b) => jumpSound.setBuffer(b));
+audioLoader.load("/sounds/spaceEngineLow_003.ogg", (b) => {
+  sprintSound.setBuffer(b);
+  sprintSound.setLoop(true);
+  sprintSound.setVolume(0.0);
+});
+audioLoader.load("/sounds/spaceEngineLow_001.ogg", (b) => {
+  footstepSound.setBuffer(b);
+  footstepSound.setLoop(true);
+  footstepSound.setVolume(0.1);
+});
+
+/************************************************************
+ ************************************************************
+ ************************************************************
+ ************************************************************
+ ************************************************************
+ ************************************************************/
+
 // ─── 🔹 Character ─────────────
 // ──────────────────────────────────────────────────────────────────
 
@@ -142,92 +197,92 @@ const scene = new THREE.Scene();
  ************************************************************
  ************************************************************/
 
-// ─── 🔹 Player ─────────────
-// ──────────────────────────────────────────────────────────────────
-let player: THREE.Object3D;
-let playerMixer: THREE.AnimationMixer;
+// ─────────────────────────────────────────────────────────────
+// 🔹 Player & Animation
+// ─────────────────────────────────────────────────────────────
+let player!: THREE.Object3D;
+let playerMixer!: THREE.AnimationMixer;
 
-const cameraCollisionRaycaster = new THREE.Raycaster();
-const cameraCollisionObjects: THREE.Object3D[] = [];
+// ─────────────────────────────────────────────────────────────
+// 🔹 Constants
+// ─────────────────────────────────────────────────────────────
+const MOVE_SPEED = 10;
+const SPRINT_MULTIPLIER = 2;
+const GRAVITY = -30;
+const JUMP_FORCE = 15;
+const PLAYER_RADIUS = 0.5;
 
-gltfLoader.load("/robi.glb", (object) => {
-  console.log(object);
+const GROUND_CHECK_DISTANCE = 0.5;
+const FALL_RESPAWN_Y = -50;
+const MAX_AIR_TIME = 2.5;
 
-  player = object.scene;
-  playerMixer = new THREE.AnimationMixer(player);
-  const idleClip = object.animations.find((a) => a.name === "Scene");
-  if (idleClip) {
-    const idle = playerMixer.clipAction(idleClip);
-    idle.play();
-  }
+const MOUSE_SENSITIVITY = 0.002;
+const MOBILE_LOOK_SENSITIVITY = 0.003;
 
-  player.position.set(5, 5, 0);
-  player.scale.set(3, 3, 3);
-  scene.add(player);
-});
+const COYOTE_TIME = 0.15;
+const JUMP_BUFFER = 0.15;
 
-const keys: Record<string, boolean> = {};
-window.addEventListener("keydown", (e) => (keys[e.code] = true));
-window.addEventListener("keyup", (e) => (keys[e.code] = false));
+const SPRINT_LEAN_ANGLE = THREE.MathUtils.degToRad(25); // max forward tilt
+const LEAN_LERP_SPEED = 10;
 
+// ─────────────────────────────────────────────────────────────
+// 🔹 Camera Offsets
+// ─────────────────────────────────────────────────────────────
+const CAMERA_OFFSET = new THREE.Vector3(0, 2, 5);
+const CAMERA_TARGET_OFFSET = new THREE.Vector3(0, 1.5, 0);
+
+// ─────────────────────────────────────────────────────────────
+// 🔹 State
+// ─────────────────────────────────────────────────────────────
 let yaw = 0;
 let pitch = 0;
-const mouseSensitivity = 0.002;
-const cameraOffset = new THREE.Vector3(0, 2, 5);
-const cameraTargetOffset = new THREE.Vector3(0, 1.5, 0);
-
-const moveSpeed = 10;
-const sprintMultiplier = 1.8;
-
-const gravity = -30;
-const jumpForce = 15;
-
 let verticalVelocity = 0;
+let airTime = 0;
 let isGrounded = false;
 
 const respawnPosition = new THREE.Vector3(5, 5, 0);
-const fallRespawnY = -20;
-const maxAirTime = 2.5;
-let airTime = 0;
 
-const groundRaycaster = new THREE.Raycaster();
-const groundCheckDistance = 0.5;
-const groundObjects: THREE.Object3D[] = [];
+let coyoteTimer = 0;
+let jumpBufferTimer = 0;
 
-const wallRaycaster = new THREE.Raycaster();
-const playerRadius = 0.5;
-const wallObjects: THREE.Object3D[] = [];
+let headBobTime = 0;
 
-const clock = new THREE.Clock();
+// ─────────────────────────────────────────────────────────────
+// 🔹 Input
+// ─────────────────────────────────────────────────────────────
+const keys: Record<string, boolean> = {};
 const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
+// Desktop keyboard
+window.addEventListener("keydown", (e) => (keys[e.code] = true));
+window.addEventListener("keyup", (e) => (keys[e.code] = false));
+
+// Mouse look
 renderer.domElement.addEventListener("click", () => {
-  if (isMobile) {
-    requestfullscreen(renderer.domElement);
-    return;
-  }
-  renderer.domElement.requestPointerLock();
+  if (!isMobile) renderer.domElement.requestPointerLock();
+  else requestfullscreen(renderer.domElement);
 });
 
 document.addEventListener("mousemove", (e) => {
   if (document.pointerLockElement !== renderer.domElement) return;
 
-  yaw -= e.movementX * mouseSensitivity;
-  pitch -= e.movementY * mouseSensitivity;
-
+  yaw -= e.movementX * MOUSE_SENSITIVITY;
+  pitch -= e.movementY * MOUSE_SENSITIVITY;
   pitch = THREE.MathUtils.clamp(pitch, -Math.PI / 3, Math.PI / 3);
 });
 
+// ─────────────────────────────────────────────────────────────
+// 🔹 Mobile Touch Input
+// ─────────────────────────────────────────────────────────────
 let leftTouchId: number | null = null;
 let rightTouchId: number | null = null;
+let mobileJump = false;
+let mobileSprint = false;
 
 const leftStart = new THREE.Vector2();
 const rightStart = new THREE.Vector2();
 const leftDelta = new THREE.Vector2();
 const rightDelta = new THREE.Vector2();
-
-let mobileJump = false;
-let mobileSprint = false;
 
 window.addEventListener("touchstart", (e) => {
   for (const t of e.changedTouches) {
@@ -241,7 +296,6 @@ window.addEventListener("touchstart", (e) => {
       rightDelta.set(0, 0);
     }
   }
-
   mobileJump = e.touches.length >= 2;
   mobileSprint = e.touches.length >= 3;
 });
@@ -251,7 +305,6 @@ window.addEventListener("touchmove", (e) => {
     if (t.identifier === leftTouchId) {
       leftDelta.set(t.clientX - leftStart.x, t.clientY - leftStart.y);
     }
-
     if (t.identifier === rightTouchId) {
       rightDelta.set(t.clientX - rightStart.x, t.clientY - rightStart.y);
     }
@@ -260,145 +313,219 @@ window.addEventListener("touchmove", (e) => {
 
 window.addEventListener("touchend", (e) => {
   for (const t of e.changedTouches) {
-    if (t.identifier === leftTouchId) {
-      leftTouchId = null;
-      leftDelta.set(0, 0);
-    }
-
-    if (t.identifier === rightTouchId) {
-      rightTouchId = null;
-      rightDelta.set(0, 0);
-    }
+    if (t.identifier === leftTouchId) leftTouchId = null;
+    if (t.identifier === rightTouchId) rightTouchId = null;
   }
+  leftDelta.set(0, 0);
+  rightDelta.set(0, 0);
 
   mobileJump = e.touches.length >= 2;
   mobileSprint = e.touches.length >= 3;
 });
 
-// const _dir = new THREE.Vector3();
-// const _moveStep = new THREE.Vector3();
-// const _wallOrigin = new THREE.Vector3();
-// const _wallDir = new THREE.Vector3();
-// const _camOffset = new THREE.Vector3();
-// const _camTarget = new THREE.Vector3();
+// ─────────────────────────────────────────────────────────────
+// 🔹 Raycasters & Shared Objects
+// ─────────────────────────────────────────────────────────────
+const groundRaycaster = new THREE.Raycaster();
+const wallRaycaster = new THREE.Raycaster();
+const cameraRaycaster = new THREE.Raycaster();
 
-function updateThirdPersonController(delta: number) {
-  delta = Math.min(delta, 0.033); // cap at ~30 FPS
+const moveDir = new THREE.Vector3();
+const moveStep = new THREE.Vector3();
+const wallNormal = new THREE.Vector3();
+const camEuler = new THREE.Euler(0, 0, 0, "YXZ");
+const camOffset = new THREE.Vector3();
+const camTarget = new THREE.Vector3();
 
-  // ===== GROUND CHECK =====
-  groundRaycaster.set(player.position, new THREE.Vector3(0, -1, 0));
-  const hits = groundRaycaster.intersectObjects(groundObjects, true);
+// Objects to collide against
+const groundObjects: THREE.Object3D[] = [];
+const wallObjects: THREE.Object3D[] = [];
+const cameraCollisionObjects: THREE.Object3D[] = [];
 
-  isGrounded = hits.length > 0 && hits[0].distance < groundCheckDistance;
+// ─────────────────────────────────────────────────────────────
+// 🔹 Player Loader
+// ─────────────────────────────────────────────────────────────
+let playerPivot!: THREE.Object3D;
+
+gltfLoader.load("/robi.glb", (gltf) => {
+  player = new THREE.Group();
+  playerPivot = gltf.scene;
+
+  player.add(playerPivot);
+  player.position.copy(respawnPosition);
+  player.scale.set(3, 3, 3);
+
+  scene.add(player);
+
+  playerMixer = new THREE.AnimationMixer(playerPivot);
+  const idle = gltf.animations.find((a) => a.name === "Scene");
+  if (idle) playerMixer.clipAction(idle).play();
+});
+
+// ─────────────────────────────────────────────────────────────
+// 🔹 Main Controller Update
+// ─────────────────────────────────────────────────────────────
+export function updateThirdPersonController(delta: number) {
+  if (!player) return;
+
+  // ===== Ground Check =====
+  groundRaycaster.set(player.position, THREE.Object3D.DEFAULT_UP.clone().negate());
+  const groundHits = groundRaycaster.intersectObjects(groundObjects, true);
+
+  isGrounded = groundHits.length > 0 && groundHits[0].distance < GROUND_CHECK_DISTANCE;
 
   if (isGrounded) {
     airTime = 0;
-    if (verticalVelocity < 0) {
-      verticalVelocity = 0;
-      const targetY = hits[0].point.y + groundCheckDistance;
-      player.position.y = THREE.MathUtils.lerp(player.position.y, targetY, 0.25);
-    }
+    coyoteTimer = COYOTE_TIME;
+    verticalVelocity = Math.max(0, verticalVelocity);
+    player.position.y = THREE.MathUtils.lerp(
+      player.position.y,
+      groundHits[0].point.y + GROUND_CHECK_DISTANCE,
+      0.25
+    );
   } else {
     airTime += delta;
+    coyoteTimer -= delta;
   }
 
-  // ===== JUMP =====
-  if ((keys["Space"] || mobileJump) && isGrounded) {
-    verticalVelocity = jumpForce;
-    isGrounded = false;
+  // ===== Jump =====
+  if (isGrounded) coyoteTimer = COYOTE_TIME;
+  else coyoteTimer -= delta;
+
+  if (keys["Space"] || mobileJump) {
+    jumpBufferTimer = JUMP_BUFFER;
+  } else {
+    jumpBufferTimer -= delta;
   }
 
-  // ===== GRAVITY =====
-  verticalVelocity += gravity * delta;
+  if (jumpBufferTimer > 0 && coyoteTimer > 0) {
+    verticalVelocity = JUMP_FORCE;
+    jumpBufferTimer = 0;
+    coyoteTimer = 0;
+
+    if (jumpSound.isPlaying) jumpSound.stop();
+    jumpSound.play();
+  }
+
+  // ===== Gravity =====
+  verticalVelocity += GRAVITY * delta;
   player.position.y += verticalVelocity * delta;
 
-  // ===== RESPAWN =====
-  if (player.position.y < fallRespawnY || airTime > maxAirTime) {
+  // ===== Respawn =====
+  if (player.position.y < FALL_RESPAWN_Y || airTime > MAX_AIR_TIME) {
     player.position.copy(respawnPosition);
     verticalVelocity = 0;
     airTime = 0;
   }
 
-  // ===== SPEED =====
-  let speed = moveSpeed;
-  if (keys["ShiftLeft"] || keys["ShiftRight"] || mobileSprint) {
-    speed *= sprintMultiplier;
-  }
+  // ===== Movement Input =====
+  let inputX = 0;
+  let inputZ = 0;
 
-  // ===== MOVEMENT INPUT =====
-  let moveX = 0;
-  let moveZ = 0;
-
-  if (!isMobile) {
-    moveX = (keys["KeyA"] ? -1 : 0) + (keys["KeyD"] ? 1 : 0);
-    moveZ = (keys["KeyW"] ? -1 : 0) + (keys["KeyS"] ? 1 : 0);
+  if (isMobile) {
+    inputX = THREE.MathUtils.clamp(leftDelta.x / 60, -1, 1);
+    inputZ = THREE.MathUtils.clamp(leftDelta.y / 60, -1, 1);
   } else {
-    moveX = THREE.MathUtils.clamp(leftDelta.x / 60, -1, 1);
-    moveZ = THREE.MathUtils.clamp(leftDelta.y / 60, -1, 1);
+    inputX = (keys["KeyA"] ? -1 : 0) + (keys["KeyD"] ? 1 : 0);
+    inputZ = (keys["KeyW"] ? -1 : 0) + (keys["KeyS"] ? 1 : 0);
   }
 
-  const direction = new THREE.Vector3(moveX, 0, moveZ);
+  moveDir.set(inputX, 0, inputZ);
+  if (moveDir.lengthSq() > 0) {
+    moveDir.normalize().applyAxisAngle(THREE.Object3D.DEFAULT_UP, yaw);
 
-  if (direction.lengthSq() > 0) {
-    direction.normalize();
-    direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
-
-    const moveStep = direction.clone().multiplyScalar(speed * delta);
-
-    // Horizontal wall collision check
-    wallRaycaster.set(
-      player.position.clone().add(new THREE.Vector3(0, 0.5, 0)), // chest height
-      moveStep.clone().normalize()
-    );
-
-    wallRaycaster.far = moveStep.length() + playerRadius;
-
-    const wallHits = wallRaycaster.intersectObjects(wallObjects, true);
-
-    if (wallHits.length === 0) {
-      // no wall → move freely
-      player.position.add(moveStep);
-    } else {
-      // slide along wall
-      const normal = wallHits[0].face?.normal
-        .clone()
-        .applyMatrix3(new THREE.Matrix3().getNormalMatrix(wallHits[0].object.matrixWorld));
-
-      if (normal) {
-        const slide = moveStep.clone().projectOnPlane(normal);
-        player.position.add(slide);
-      }
+    let speed = MOVE_SPEED;
+    if (keys["ShiftLeft"] || keys["ShiftRight"] || mobileSprint) {
+      speed *= SPRINT_MULTIPLIER;
     }
 
-    const targetRot = Math.atan2(direction.x, direction.z);
-    player.rotation.y = THREE.MathUtils.lerp(player.rotation.y, targetRot, delta * 10);
+    const isSprinting = keys["ShiftLeft"] || keys["ShiftRight"] || mobileSprint;
+
+    if (isSprinting) {
+      playerMixer.timeScale = 2.0;
+    } else {
+      playerMixer.timeScale = 1.0;
+    }
+
+    // Target volume
+    const targetSprintVolume = isSprinting ? SPRINT_VOLUME : IDLE_VOLUME;
+
+    // Smooth fade
+    const currentVolume = sprintSound.getVolume();
+    const newVolume = THREE.MathUtils.lerp(
+      currentVolume,
+      targetSprintVolume,
+      delta * SPRINT_VOLUME_LERP
+    );
+
+    sprintSound.setVolume(newVolume);
+
+    moveStep.copy(moveDir).multiplyScalar(speed * delta);
+
+    // Wall collision
+    wallRaycaster.set(
+      player.position.clone().add(new THREE.Vector3(0, 0.8, 0)),
+      moveStep.clone().normalize()
+    );
+    wallRaycaster.far = moveStep.length() + PLAYER_RADIUS;
+
+    const wallHits = wallRaycaster.intersectObjects(wallObjects, true);
+    if (wallHits.length === 0) {
+      player.position.add(moveStep);
+    } else if (wallHits[0].face) {
+      wallNormal.copy(wallHits[0].face.normal).transformDirection(wallHits[0].object.matrixWorld);
+
+      moveStep.projectOnPlane(wallNormal);
+      player.position.add(moveStep);
+    }
+
+    const targetYaw = Math.atan2(moveDir.x, moveDir.z);
+    player.rotation.y = THREE.MathUtils.lerp(player.rotation.y, targetYaw, delta * 10);
+
+    // ===== Sprint Forward Lean (LOCAL) =====
+    const targetLean = isSprinting && moveDir.lengthSq() > 0 ? SPRINT_LEAN_ANGLE : 0;
+
+    playerPivot.rotation.x = THREE.MathUtils.lerp(
+      playerPivot.rotation.x,
+      targetLean,
+      delta * LEAN_LERP_SPEED
+    );
   }
 
-  // ===== MOBILE CAMERA LOOK =====
+  // ===== Mobile Look =====
   if (isMobile && rightTouchId !== null) {
-    yaw -= rightDelta.x * 0.003;
-    pitch -= rightDelta.y * 0.003;
+    yaw -= rightDelta.x * MOBILE_LOOK_SENSITIVITY;
+    pitch -= rightDelta.y * MOBILE_LOOK_SENSITIVITY;
     pitch = THREE.MathUtils.clamp(pitch, -Math.PI / 3, Math.PI / 3);
   }
 
-  // ===== CAMERA FOLLOW =====
-  const camRot = new THREE.Euler(pitch, yaw, 0, "YXZ");
-  const offset = cameraOffset.clone().applyEuler(camRot);
-  const target = player.position.clone().add(cameraTargetOffset);
-  let finalOffset = offset.clone();
+  // ===== Camera =====
+  camEuler.set(pitch, yaw, 0);
+  camOffset.copy(CAMERA_OFFSET).applyEuler(camEuler);
+  camTarget.copy(player.position).add(CAMERA_TARGET_OFFSET);
 
-  // Check for collisions along camera ray
-  cameraCollisionRaycaster.set(target, offset.clone().normalize());
-  const cameraHits = cameraCollisionRaycaster.intersectObjects(cameraCollisionObjects, true);
+  cameraRaycaster.set(camTarget, camOffset.clone().normalize());
+  const camHits = cameraRaycaster.intersectObjects(cameraCollisionObjects, true);
 
-  if (cameraHits.length > 0 && cameraHits[0].distance < offset.length()) {
-    // Camera would collide, move it closer to the player
-    const safeDist = Math.max(cameraHits[0].distance - 0.5, 1);
-    finalOffset.lerp(offset.normalize().multiplyScalar(safeDist), 0.2);
+  if (camHits.length > 0 && camHits[0].distance < camOffset.length()) {
+    camOffset.setLength(Math.max(camHits[0].distance - 0.5, 1));
   }
 
-  camera.position.copy(target).add(finalOffset);
-  camera.lookAt(target);
+  camera.position.copy(camTarget).add(camOffset);
+  camera.lookAt(camTarget);
+
+  const targetFov = keys["ShiftLeft"] || keys["ShiftRight"] || mobileSprint ? 60 : 45;
+
+  camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 0.1);
+  camera.updateProjectionMatrix();
+
+  if (isGrounded && moveDir.lengthSq() > 0) {
+    headBobTime += delta * 10;
+  } else {
+    headBobTime = 0;
+  }
+
+  camera.position.y += Math.sin(headBobTime) * 0.05;
 }
 
 /************************************************************
@@ -900,6 +1027,17 @@ gltfLoader.load("/ufo.glb", (object) => {
   const ufoGroup = object.scene;
   const ufoModel = ufoGroup.children[0];
 
+  const ufoSound = new THREE.PositionalAudio(audioListener);
+  audioLoader.load("/sounds/spaceEngine_003.ogg", (buffer) => {
+    ufoSound.setBuffer(buffer);
+    ufoSound.setLoop(true);
+    ufoSound.setVolume(0.3);
+    ufoSound.setRefDistance(10);
+    ufoSound.play();
+  });
+
+  ufoModel.add(ufoSound);
+
   ufoModel.scale.set(0.04, 0.04, 0.04);
 
   ufoModel.position.z = -25;
@@ -940,10 +1078,10 @@ scene.add(ambientLight);
 
 // ─── 🔹 Animation loop ─────────────
 // ──────────────────────────────────────────────────────────────────
+const clock = new THREE.Clock();
 gsap.ticker.add(() => {
   renderer.render(scene, camera);
   let delta = clock.getDelta();
-  delta = Math.min(delta, 0.033); // max ~30 FPS step
 
   updateThirdPersonController(delta);
   if (playerMixer) playerMixer.update(delta);
