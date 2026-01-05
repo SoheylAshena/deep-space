@@ -197,9 +197,8 @@ audioLoader.load("/sounds/spaceEngineLow_001.ogg", (b) => {
  ************************************************************
  ************************************************************/
 
-// ─────────────────────────────────────────────────────────────
-// 🔹 Player & Animation
-// ─────────────────────────────────────────────────────────────
+// ─── 🔹 Third person controller ─────────────
+// ──────────────────────────────────────────────────────────────────
 let player!: THREE.Object3D;
 let playerMixer!: THREE.AnimationMixer;
 
@@ -214,6 +213,7 @@ const PLAYER_RADIUS = 0.5;
 
 const GROUND_CHECK_DISTANCE = 0.5;
 const FALL_RESPAWN_Y = -50;
+const RESPAWN_POSITION = new THREE.Vector3(0, 5, 0);
 const MAX_AIR_TIME = 2.5;
 
 const MOUSE_SENSITIVITY = 0.002;
@@ -222,8 +222,11 @@ const MOBILE_LOOK_SENSITIVITY = 0.003;
 const COYOTE_TIME = 0.15;
 const JUMP_BUFFER = 0.15;
 
-const SPRINT_LEAN_ANGLE = THREE.MathUtils.degToRad(25); // max forward tilt
+const SPRINT_LEAN_ANGLE = THREE.MathUtils.degToRad(25);
 const LEAN_LERP_SPEED = 10;
+
+const DEFAULT_UP = new THREE.Vector3(0, 1, 0);
+const DEFAULT_DOWN = new THREE.Vector3(0, -1, 0);
 
 // ─────────────────────────────────────────────────────────────
 // 🔹 Camera Offsets
@@ -236,25 +239,29 @@ const CAMERA_TARGET_OFFSET = new THREE.Vector3(0, 1.5, 0);
 // ─────────────────────────────────────────────────────────────
 let yaw = 0;
 let pitch = 0;
+
 let verticalVelocity = 0;
 let airTime = 0;
 let isGrounded = false;
-
-const respawnPosition = new THREE.Vector3(5, 5, 0);
 
 let coyoteTimer = 0;
 let jumpBufferTimer = 0;
 
 let headBobTime = 0;
 
+let isMoving = false;
+let isSprinting = false;
+
 // ─────────────────────────────────────────────────────────────
 // 🔹 Input
 // ─────────────────────────────────────────────────────────────
 const keys: Record<string, boolean> = {};
+
 const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 // Desktop keyboard
 window.addEventListener("keydown", (e) => (keys[e.code] = true));
+
 window.addEventListener("keyup", (e) => (keys[e.code] = false));
 
 // Mouse look
@@ -352,14 +359,14 @@ gltfLoader.load("/robi.glb", (gltf) => {
   playerPivot = gltf.scene;
 
   player.add(playerPivot);
-  player.position.copy(respawnPosition);
+  player.position.copy(RESPAWN_POSITION);
   player.scale.set(3, 3, 3);
 
   scene.add(player);
 
   playerMixer = new THREE.AnimationMixer(playerPivot);
-  const idle = gltf.animations.find((a) => a.name === "Scene");
-  if (idle) playerMixer.clipAction(idle).play();
+  const hoverAnimation = gltf.animations.find((a) => a.name === "Scene");
+  if (hoverAnimation) playerMixer.clipAction(hoverAnimation).play();
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -369,7 +376,7 @@ export function updateThirdPersonController(delta: number) {
   if (!player) return;
 
   // ===== Ground Check =====
-  groundRaycaster.set(player.position, THREE.Object3D.DEFAULT_UP.clone().negate());
+  groundRaycaster.set(player.position, DEFAULT_DOWN);
   const groundHits = groundRaycaster.intersectObjects(groundObjects, true);
 
   isGrounded = groundHits.length > 0 && groundHits[0].distance < GROUND_CHECK_DISTANCE;
@@ -378,20 +385,13 @@ export function updateThirdPersonController(delta: number) {
     airTime = 0;
     coyoteTimer = COYOTE_TIME;
     verticalVelocity = Math.max(0, verticalVelocity);
-    player.position.y = THREE.MathUtils.lerp(
-      player.position.y,
-      groundHits[0].point.y + GROUND_CHECK_DISTANCE,
-      0.25
-    );
+    player.position.y = groundHits[0].point.y + GROUND_CHECK_DISTANCE;
   } else {
     airTime += delta;
     coyoteTimer -= delta;
   }
 
   // ===== Jump =====
-  if (isGrounded) coyoteTimer = COYOTE_TIME;
-  else coyoteTimer -= delta;
-
   if (keys["Space"] || mobileJump) {
     jumpBufferTimer = JUMP_BUFFER;
   } else {
@@ -403,17 +403,17 @@ export function updateThirdPersonController(delta: number) {
     jumpBufferTimer = 0;
     coyoteTimer = 0;
 
-    if (jumpSound.isPlaying) jumpSound.stop();
     jumpSound.play();
   }
 
   // ===== Gravity =====
+  console.log(verticalVelocity);
   verticalVelocity += GRAVITY * delta;
   player.position.y += verticalVelocity * delta;
 
   // ===== Respawn =====
   if (player.position.y < FALL_RESPAWN_Y || airTime > MAX_AIR_TIME) {
-    player.position.copy(respawnPosition);
+    player.position.copy(RESPAWN_POSITION);
     verticalVelocity = 0;
     airTime = 0;
   }
@@ -431,35 +431,38 @@ export function updateThirdPersonController(delta: number) {
   }
 
   moveDir.set(inputX, 0, inputZ);
-  if (moveDir.lengthSq() > 0) {
-    moveDir.normalize().applyAxisAngle(THREE.Object3D.DEFAULT_UP, yaw);
+  isMoving = moveDir.lengthSq() > 0;
+  isSprinting = keys["ShiftLeft"] || keys["ShiftRight"] || mobileSprint;
+
+  // ===== Sprint Forward Lean =====
+  const targetLean = isSprinting && isMoving ? SPRINT_LEAN_ANGLE : 0;
+  playerPivot.rotation.x = THREE.MathUtils.lerp(
+    playerPivot.rotation.x,
+    targetLean,
+    delta * LEAN_LERP_SPEED
+  );
+
+  // ===== Sprint Sound Volume =====
+  const targetSprintVolume = isSprinting ? SPRINT_VOLUME : IDLE_VOLUME;
+  const currentVolume = sprintSound.getVolume();
+  const newVolume = THREE.MathUtils.lerp(
+    currentVolume,
+    targetSprintVolume,
+    delta * SPRINT_VOLUME_LERP
+  );
+  sprintSound.setVolume(newVolume);
+
+  // ===== Movement, Collisions, Rotation =====
+  if (isMoving) {
+    moveDir.normalize().applyAxisAngle(DEFAULT_UP, yaw);
 
     let speed = MOVE_SPEED;
-    if (keys["ShiftLeft"] || keys["ShiftRight"] || mobileSprint) {
-      speed *= SPRINT_MULTIPLIER;
-    }
+    if (isSprinting) speed *= SPRINT_MULTIPLIER;
 
-    const isSprinting = keys["ShiftLeft"] || keys["ShiftRight"] || mobileSprint;
+    // Player animation speed
+    playerMixer.timeScale = isSprinting ? 2.0 : 1.0;
 
-    if (isSprinting) {
-      playerMixer.timeScale = 2.0;
-    } else {
-      playerMixer.timeScale = 1.0;
-    }
-
-    // Target volume
-    const targetSprintVolume = isSprinting ? SPRINT_VOLUME : IDLE_VOLUME;
-
-    // Smooth fade
-    const currentVolume = sprintSound.getVolume();
-    const newVolume = THREE.MathUtils.lerp(
-      currentVolume,
-      targetSprintVolume,
-      delta * SPRINT_VOLUME_LERP
-    );
-
-    sprintSound.setVolume(newVolume);
-
+    // Move step
     moveStep.copy(moveDir).multiplyScalar(speed * delta);
 
     // Wall collision
@@ -474,22 +477,13 @@ export function updateThirdPersonController(delta: number) {
       player.position.add(moveStep);
     } else if (wallHits[0].face) {
       wallNormal.copy(wallHits[0].face.normal).transformDirection(wallHits[0].object.matrixWorld);
-
       moveStep.projectOnPlane(wallNormal);
       player.position.add(moveStep);
     }
 
+    // Smooth rotation toward movement direction
     const targetYaw = Math.atan2(moveDir.x, moveDir.z);
     player.rotation.y = THREE.MathUtils.lerp(player.rotation.y, targetYaw, delta * 10);
-
-    // ===== Sprint Forward Lean (LOCAL) =====
-    const targetLean = isSprinting && moveDir.lengthSq() > 0 ? SPRINT_LEAN_ANGLE : 0;
-
-    playerPivot.rotation.x = THREE.MathUtils.lerp(
-      playerPivot.rotation.x,
-      targetLean,
-      delta * LEAN_LERP_SPEED
-    );
   }
 
   // ===== Mobile Look =====
@@ -514,12 +508,12 @@ export function updateThirdPersonController(delta: number) {
   camera.position.copy(camTarget).add(camOffset);
   camera.lookAt(camTarget);
 
-  const targetFov = keys["ShiftLeft"] || keys["ShiftRight"] || mobileSprint ? 60 : 45;
-
+  const targetFov = isSprinting ? 60 : 45;
   camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 0.1);
   camera.updateProjectionMatrix();
 
-  if (isGrounded && moveDir.lengthSq() > 0) {
+  // ===== Head Bob =====
+  if (isGrounded && isMoving) {
     headBobTime += delta * 10;
   } else {
     headBobTime = 0;
@@ -656,7 +650,24 @@ gltfLoader.load("/fantasy-planet.glb", (object) => {
   groundObjects.push(fantasy);
   wallObjects.push(fantasy);
   cameraCollisionObjects.push(fantasy);
-  scene.add(fantasy);
+  // scene.add(fantasy);
+});
+
+/************************************************************
+ ************************************************************
+ ************************************************************
+ ************************************************************
+ ************************************************************
+ ************************************************************/
+
+// ─── 🔹 Land ─────────────
+// ──────────────────────────────────────────────────────────────────
+gltfLoader.load("/land.glb", (object) => {
+  const land = object.scene;
+  land.scale.set(0.2, 0.2, 0.2);
+  groundObjects.push(land);
+  cameraCollisionObjects.push(land);
+  scene.add(land);
 });
 
 /************************************************************
