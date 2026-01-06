@@ -12,6 +12,7 @@ import * as THREE from "three";
 import gsap from "gsap";
 import { GLTFLoader } from "three/examples/jsm/Addons.js";
 import { degToRad } from "three/src/math/MathUtils.js";
+import RAPIER from "@dimforge/rapier3d-compat";
 import GUI from "lil-gui";
 import "./style.css";
 
@@ -19,6 +20,23 @@ import "./style.css";
 // ──────────────────────────────────────────────────────────────────
 const gui = new GUI();
 gui.hide();
+
+/************************************************************
+ ************************************************************
+ ************************************************************
+ ************************************************************
+ ************************************************************
+ ************************************************************/
+
+// ─── 🔹 Physics ─────────────
+// ──────────────────────────────────────────────────────────────────
+let physicsWorld: RAPIER.World;
+await RAPIER.init();
+physicsWorld = new RAPIER.World({
+  x: 0,
+  y: -15,
+  z: 0,
+});
 
 /************************************************************
  ************************************************************
@@ -95,20 +113,6 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
  ************************************************************
  ************************************************************/
 
-// ─── 🔹 CSS Renderer ─────────────
-// ──────────────────────────────────────────────────────────────────
-// const cssRendererContainer = document.querySelector("#css-renderer") as HTMLDivElement;
-// const domRenderer = new CSS3DRenderer();
-// domRenderer.setSize(window.innerWidth, window.innerHeight);
-// cssRendererContainer.appendChild(domRenderer.domElement);
-
-/************************************************************
- ************************************************************
- ************************************************************
- ************************************************************
- ************************************************************
- ************************************************************/
-
 // ─── 🔹 Camera ─────────────
 // ──────────────────────────────────────────────────────────────────
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight);
@@ -133,14 +137,11 @@ const scene = new THREE.Scene();
  ************************************************************/
 
 // ─── 🔊 Audio Setup ─────────────────────────────────────────────
-const SPRINT_VOLUME = 1.0;
-const IDLE_VOLUME = 0.0;
-const SPRINT_VOLUME_LERP = 5; // higher = faster response
 
 const audioListener = new THREE.AudioListener();
 camera.add(audioListener);
 
-const audioLoader = new THREE.AudioLoader();
+const audioLoader = new THREE.AudioLoader(loadingManager);
 
 // Background music
 const bgMusic = new THREE.Audio(audioListener);
@@ -187,98 +188,64 @@ audioLoader.load("/sounds/spaceEngineLow_001.ogg", (b) => {
  ************************************************************
  ************************************************************/
 
-// ─── 🔹 Character ─────────────
-// ──────────────────────────────────────────────────────────────────
-
-/************************************************************
- ************************************************************
- ************************************************************
- ************************************************************
- ************************************************************
- ************************************************************/
-
 // ─── 🔹 Third person controller ─────────────
 // ──────────────────────────────────────────────────────────────────
 let player!: THREE.Object3D;
 let playerMixer!: THREE.AnimationMixer;
 
-// ─────────────────────────────────────────────────────────────
 // 🔹 Constants
 // ─────────────────────────────────────────────────────────────
 const MOVE_SPEED = 10;
 const SPRINT_MULTIPLIER = 2;
-const GRAVITY = -30;
-const JUMP_FORCE = 15;
 const PLAYER_RADIUS = 0.5;
-
-const GROUND_CHECK_DISTANCE = 0.5;
-const FALL_RESPAWN_Y = -50;
-const RESPAWN_POSITION = new THREE.Vector3(0, 5, 0);
-const MAX_AIR_TIME = 2.5;
-
+const RESPAWN_POSITION = new THREE.Vector3(5, 5, 0);
 const MOUSE_SENSITIVITY = 0.002;
-const MOBILE_LOOK_SENSITIVITY = 0.003;
-
-const COYOTE_TIME = 0.15;
-const JUMP_BUFFER = 0.15;
-
 const SPRINT_LEAN_ANGLE = THREE.MathUtils.degToRad(25);
 const LEAN_LERP_SPEED = 10;
-
 const DEFAULT_UP = new THREE.Vector3(0, 1, 0);
-const DEFAULT_DOWN = new THREE.Vector3(0, -1, 0);
+const JUMP_FORCE = 18;
+const GROUND_DETECTION_DISTANCE = 0.8;
+const COYOTE_TIME = 0.1; // Time after leaving ground to allow jump
+const LINEAR_DAMPING = 1; // Reduced from 4 for realistic gravity feel
 
-// ─────────────────────────────────────────────────────────────
 // 🔹 Camera Offsets
 // ─────────────────────────────────────────────────────────────
 const CAMERA_OFFSET = new THREE.Vector3(0, 2, 5);
 const CAMERA_TARGET_OFFSET = new THREE.Vector3(0, 1.5, 0);
 
-// ─────────────────────────────────────────────────────────────
 // 🔹 State
 // ─────────────────────────────────────────────────────────────
 let yaw = 0;
 let pitch = 0;
-
-let verticalVelocity = 0;
-let airTime = 0;
-let isGrounded = false;
-
-let coyoteTimer = 0;
-let jumpBufferTimer = 0;
-
-let headBobTime = 0;
-
 let isMoving = false;
 let isSprinting = false;
+let isGrounded = false;
+let canJump = false;
+let spaceJustPressed = false;
+let coyoteCounter = 0;
 
-// ─────────────────────────────────────────────────────────────
 // 🔹 Input
 // ─────────────────────────────────────────────────────────────
 const keys: Record<string, boolean> = {};
-
 const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 // Desktop keyboard
 window.addEventListener("keydown", (e) => (keys[e.code] = true));
-
 window.addEventListener("keyup", (e) => (keys[e.code] = false));
 
 // Mouse look
 renderer.domElement.addEventListener("click", () => {
   if (!isMobile) renderer.domElement.requestPointerLock();
-  else requestfullscreen(renderer.domElement);
+  else renderer.domElement.requestFullscreen();
 });
 
 document.addEventListener("mousemove", (e) => {
   if (document.pointerLockElement !== renderer.domElement) return;
-
   yaw -= e.movementX * MOUSE_SENSITIVITY;
   pitch -= e.movementY * MOUSE_SENSITIVITY;
   pitch = THREE.MathUtils.clamp(pitch, -Math.PI / 3, Math.PI / 3);
 });
 
-// ─────────────────────────────────────────────────────────────
 // 🔹 Mobile Touch Input
 // ─────────────────────────────────────────────────────────────
 let leftTouchId: number | null = null;
@@ -330,39 +297,41 @@ window.addEventListener("touchend", (e) => {
   mobileSprint = e.touches.length >= 3;
 });
 
+// 🔹 Shared Objects
 // ─────────────────────────────────────────────────────────────
-// 🔹 Raycasters & Shared Objects
-// ─────────────────────────────────────────────────────────────
-const groundRaycaster = new THREE.Raycaster();
-const wallRaycaster = new THREE.Raycaster();
-const cameraRaycaster = new THREE.Raycaster();
-
 const moveDir = new THREE.Vector3();
-const moveStep = new THREE.Vector3();
-const wallNormal = new THREE.Vector3();
 const camEuler = new THREE.Euler(0, 0, 0, "YXZ");
 const camOffset = new THREE.Vector3();
 const camTarget = new THREE.Vector3();
 
-// Objects to collide against
-const groundObjects: THREE.Object3D[] = [];
-const wallObjects: THREE.Object3D[] = [];
-const cameraCollisionObjects: THREE.Object3D[] = [];
-
-// ─────────────────────────────────────────────────────────────
 // 🔹 Player Loader
 // ─────────────────────────────────────────────────────────────
-let playerPivot!: THREE.Object3D;
+let playerPivot: THREE.Object3D;
+let playerBody: RAPIER.RigidBody;
 
 gltfLoader.load("/robi.glb", (gltf) => {
   player = new THREE.Group();
   playerPivot = gltf.scene;
 
   player.add(playerPivot);
-  player.position.copy(RESPAWN_POSITION);
   player.scale.set(3, 3, 3);
-
   scene.add(player);
+
+  // ---- PHYSICS BODY ----
+  const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+    .setTranslation(RESPAWN_POSITION.x, RESPAWN_POSITION.y, RESPAWN_POSITION.z)
+    .setLinearDamping(LINEAR_DAMPING)
+    .setAngularDamping(10);
+
+  playerBody = physicsWorld.createRigidBody(bodyDesc);
+  playerBody.lockRotations(true, true);
+
+  // Capsule collider
+  const colliderDesc = RAPIER.ColliderDesc.capsule(0.5, PLAYER_RADIUS)
+    .setFriction(0.0)
+    .setRestitution(0.0);
+
+  physicsWorld.createCollider(colliderDesc, playerBody);
 
   playerMixer = new THREE.AnimationMixer(playerPivot);
   const hoverAnimation = gltf.animations.find((a) => a.name === "Scene");
@@ -373,52 +342,31 @@ gltfLoader.load("/robi.glb", (gltf) => {
 // 🔹 Main Controller Update
 // ─────────────────────────────────────────────────────────────
 export function updateThirdPersonController(delta: number) {
-  if (!player) return;
+  if (!playerBody || !player) return;
 
-  // ===== Ground Check =====
-  groundRaycaster.set(player.position, DEFAULT_DOWN);
-  const groundHits = groundRaycaster.intersectObjects(groundObjects, true);
+  // --- Sync Three.js mesh with physics body ---
+  const pos = playerBody.translation();
+  player.position.set(pos.x, pos.y, pos.z);
 
-  isGrounded = groundHits.length > 0 && groundHits[0].distance < GROUND_CHECK_DISTANCE;
+  // --- Ground detection using raycast ---
+  const downRay = new RAPIER.Ray(pos, { x: 0, y: -1, z: 0 });
+  const hit = physicsWorld.castRay(downRay, GROUND_DETECTION_DISTANCE, true);
 
+  // Check velocity to detect if falling
+  const currentVel = playerBody.linvel();
+  const isFalling = currentVel.y < -0.1;
+
+  isGrounded = hit !== null && !isFalling;
+
+  // Coyote time - allow jump for a short time after leaving ground
   if (isGrounded) {
-    airTime = 0;
-    coyoteTimer = COYOTE_TIME;
-    verticalVelocity = Math.max(0, verticalVelocity);
-    player.position.y = groundHits[0].point.y + GROUND_CHECK_DISTANCE;
+    coyoteCounter = COYOTE_TIME;
   } else {
-    airTime += delta;
-    coyoteTimer -= delta;
+    coyoteCounter -= delta;
   }
+  canJump = coyoteCounter > 0;
 
-  // ===== Jump =====
-  if (keys["Space"] || mobileJump) {
-    jumpBufferTimer = JUMP_BUFFER;
-  } else {
-    jumpBufferTimer -= delta;
-  }
-
-  if (jumpBufferTimer > 0 && coyoteTimer > 0) {
-    verticalVelocity = JUMP_FORCE;
-    jumpBufferTimer = 0;
-    coyoteTimer = 0;
-
-    jumpSound.play();
-  }
-
-  // ===== Gravity =====
-  console.log(verticalVelocity);
-  verticalVelocity += GRAVITY * delta;
-  player.position.y += verticalVelocity * delta;
-
-  // ===== Respawn =====
-  if (player.position.y < FALL_RESPAWN_Y || airTime > MAX_AIR_TIME) {
-    player.position.copy(RESPAWN_POSITION);
-    verticalVelocity = 0;
-    airTime = 0;
-  }
-
-  // ===== Movement Input =====
+  // --- Input ---
   let inputX = 0;
   let inputZ = 0;
 
@@ -431,10 +379,36 @@ export function updateThirdPersonController(delta: number) {
   }
 
   moveDir.set(inputX, 0, inputZ);
+
   isMoving = moveDir.lengthSq() > 0;
   isSprinting = keys["ShiftLeft"] || keys["ShiftRight"] || mobileSprint;
 
-  // ===== Sprint Forward Lean =====
+  if (isMoving) moveDir.normalize();
+  moveDir.applyAxisAngle(DEFAULT_UP, yaw);
+
+  // --- Apply movement velocity ---
+  const speed = MOVE_SPEED * (isSprinting ? SPRINT_MULTIPLIER : 1);
+  const moveVel = moveDir.clone().multiplyScalar(speed);
+  playerBody.setLinvel({ x: moveVel.x, y: currentVel.y, z: moveVel.z }, true);
+
+  // --- Handle jump ---
+  const spacePressed = keys["Space"] || mobileJump;
+  spaceJustPressed = spacePressed && !keys["_spacePrev"];
+
+  if (spaceJustPressed && canJump) {
+    playerBody.setLinvel({ x: currentVel.x, y: JUMP_FORCE, z: currentVel.z }, true);
+    coyoteCounter = 0; // Use up coyote time
+    jumpSound.play();
+  }
+  keys["_spacePrev"] = spacePressed;
+
+  // --- Rotation ---
+  if (isMoving) {
+    const targetYaw = Math.atan2(moveDir.x, moveDir.z);
+    player.rotation.y = THREE.MathUtils.lerp(player.rotation.y, targetYaw, delta * 10);
+  }
+
+  // --- Sprint lean ---
   const targetLean = isSprinting && isMoving ? SPRINT_LEAN_ANGLE : 0;
   playerPivot.rotation.x = THREE.MathUtils.lerp(
     playerPivot.rotation.x,
@@ -442,84 +416,23 @@ export function updateThirdPersonController(delta: number) {
     delta * LEAN_LERP_SPEED
   );
 
-  // ===== Sprint Sound Volume =====
-  const targetSprintVolume = isSprinting ? SPRINT_VOLUME : IDLE_VOLUME;
-  const currentVolume = sprintSound.getVolume();
-  const newVolume = THREE.MathUtils.lerp(
-    currentVolume,
-    targetSprintVolume,
-    delta * SPRINT_VOLUME_LERP
-  );
-  sprintSound.setVolume(newVolume);
-
-  // ===== Movement, Collisions, Rotation =====
-  if (isMoving) {
-    moveDir.normalize().applyAxisAngle(DEFAULT_UP, yaw);
-
-    let speed = MOVE_SPEED;
-    if (isSprinting) speed *= SPRINT_MULTIPLIER;
-
-    // Player animation speed
-    playerMixer.timeScale = isSprinting ? 2.0 : 1.0;
-
-    // Move step
-    moveStep.copy(moveDir).multiplyScalar(speed * delta);
-
-    // Wall collision
-    wallRaycaster.set(
-      player.position.clone().add(new THREE.Vector3(0, 0.8, 0)),
-      moveStep.clone().normalize()
+  // --- Animation speed ---
+  if (playerMixer) {
+    const targetTimeScale = isSprinting ? 2.0 : 1.0;
+    playerMixer.timeScale = THREE.MathUtils.lerp(
+      playerMixer.timeScale,
+      targetTimeScale,
+      delta * 10
     );
-    wallRaycaster.far = moveStep.length() + PLAYER_RADIUS;
-
-    const wallHits = wallRaycaster.intersectObjects(wallObjects, true);
-    if (wallHits.length === 0) {
-      player.position.add(moveStep);
-    } else if (wallHits[0].face) {
-      wallNormal.copy(wallHits[0].face.normal).transformDirection(wallHits[0].object.matrixWorld);
-      moveStep.projectOnPlane(wallNormal);
-      player.position.add(moveStep);
-    }
-
-    // Smooth rotation toward movement direction
-    const targetYaw = Math.atan2(moveDir.x, moveDir.z);
-    player.rotation.y = THREE.MathUtils.lerp(player.rotation.y, targetYaw, delta * 10);
   }
 
-  // ===== Mobile Look =====
-  if (isMobile && rightTouchId !== null) {
-    yaw -= rightDelta.x * MOBILE_LOOK_SENSITIVITY;
-    pitch -= rightDelta.y * MOBILE_LOOK_SENSITIVITY;
-    pitch = THREE.MathUtils.clamp(pitch, -Math.PI / 3, Math.PI / 3);
-  }
-
-  // ===== Camera =====
+  // --- Camera ---
   camEuler.set(pitch, yaw, 0);
   camOffset.copy(CAMERA_OFFSET).applyEuler(camEuler);
   camTarget.copy(player.position).add(CAMERA_TARGET_OFFSET);
 
-  cameraRaycaster.set(camTarget, camOffset.clone().normalize());
-  const camHits = cameraRaycaster.intersectObjects(cameraCollisionObjects, true);
-
-  if (camHits.length > 0 && camHits[0].distance < camOffset.length()) {
-    camOffset.setLength(Math.max(camHits[0].distance - 0.5, 1));
-  }
-
   camera.position.copy(camTarget).add(camOffset);
   camera.lookAt(camTarget);
-
-  const targetFov = isSprinting ? 60 : 45;
-  camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 0.1);
-  camera.updateProjectionMatrix();
-
-  // ===== Head Bob =====
-  if (isGrounded && isMoving) {
-    headBobTime += delta * 10;
-  } else {
-    headBobTime = 0;
-  }
-
-  camera.position.y += Math.sin(headBobTime) * 0.05;
 }
 
 /************************************************************
@@ -615,80 +528,33 @@ scene.add(starfield);
  ************************************************************
  ************************************************************/
 
-// ─── 🔹 Home  ─────────────
-// ──────────────────────────────────────────────────────────────────
-// const homeDiv = document.createElement("div");
-// homeDiv.className = "home";
-// homeDiv.innerHTML = `
-//   <h1>Soheyl Ashena</h1>
-//   <h2>Frontend Developer</h2>
-// `;
-
-// const homeObject = new CSS3DObject(homeDiv);
-// homeObject.position.set(0, 0, -10);
-// homeObject.scale.set(0.01, 0.01, 0.01);
-
-// scene.add(homeObject);
-
-/************************************************************
- ************************************************************
- ************************************************************
- ************************************************************
- ************************************************************
- ************************************************************/
-
 // ─── 🔹 Fantasy planet ─────────────
 // ──────────────────────────────────────────────────────────────────
 gltfLoader.load("/fantasy-planet.glb", (object) => {
   const fantasy = object.scene;
-  const planet = fantasy.children[0].children[0];
-
   fantasy.scale.set(20, 20, 20);
+  fantasy.updateWorldMatrix(true, true);
+  scene.add(fantasy);
 
-  gsap.to(planet.rotation, { y: Math.PI * 2, repeat: -1, ease: "linear", duration: 60 });
+  fantasy.traverse((child) => {
+    if (!(child as THREE.Mesh).isMesh) return;
 
-  groundObjects.push(fantasy);
-  wallObjects.push(fantasy);
-  cameraCollisionObjects.push(fantasy);
-  // scene.add(fantasy);
+    const mesh = child as THREE.Mesh;
+    const geometry = mesh.geometry.clone();
+
+    // APPLY WORLD TRANSFORMS TO GEOMETRY
+    geometry.applyMatrix4(mesh.matrixWorld);
+
+    const body = physicsWorld.createRigidBody(RAPIER.RigidBodyDesc.fixed());
+
+    const colliderDesc = RAPIER.ColliderDesc.trimesh(
+      geometry.attributes.position.array as Float32Array,
+      geometry.index?.array as Uint32Array
+    );
+
+    physicsWorld.createCollider(colliderDesc, body);
+  });
 });
-
-/************************************************************
- ************************************************************
- ************************************************************
- ************************************************************
- ************************************************************
- ************************************************************/
-
-// ─── 🔹 Land ─────────────
-// ──────────────────────────────────────────────────────────────────
-gltfLoader.load("/land.glb", (object) => {
-  const land = object.scene;
-  land.scale.set(0.2, 0.2, 0.2);
-  groundObjects.push(land);
-  cameraCollisionObjects.push(land);
-  scene.add(land);
-});
-
-/************************************************************
- ************************************************************
- ************************************************************
- ************************************************************
- ************************************************************
- ************************************************************/
-
-// ─── 🔹 Contact ─────────────
-// ──────────────────────────────────────────────────────────────────
-
-/************************************************************
- ************************************************************
- ************************************************************
- ************************************************************
- ************************************************************
- ************************************************************/
-
-// ─── 🔹 Projects ─────────────
-// ──────────────────────────────────────────────────────────────────
 
 /************************************************************
  ************************************************************
@@ -1090,21 +956,16 @@ scene.add(ambientLight);
 // ─── 🔹 Animation loop ─────────────
 // ──────────────────────────────────────────────────────────────────
 const clock = new THREE.Clock();
-gsap.ticker.add(() => {
-  renderer.render(scene, camera);
-  let delta = clock.getDelta();
 
-  updateThirdPersonController(delta);
+gsap.ticker.add(() => {
+  let delta = clock.getDelta();
+  const myDelta = Math.min(delta, 0.1); // prevent large deltas
+
+  updateThirdPersonController(myDelta);
   if (playerMixer) playerMixer.update(delta);
 
-  // Dead zone
-  if (leftDelta.length() < 6) leftDelta.set(0, 0);
-  if (rightDelta.length() < 6) rightDelta.set(0, 0);
-
-  // Damping (smooth decay)
-  leftDelta.multiplyScalar(0.85);
-  rightDelta.multiplyScalar(0.85);
-
+  physicsWorld.step();
+  renderer.render(scene, camera);
   // domRenderer.render(scene, camera);
 });
 
@@ -1144,14 +1005,6 @@ function centerObject(object: THREE.Object3D) {
   const center = new THREE.Vector3();
   box.getCenter(center);
   object.position.sub(center);
-}
-
-function requestfullscreen(element: HTMLCanvasElement) {
-  if (element.requestFullscreen) {
-    element.requestFullscreen();
-  } else if ((element as any).webkitRequestFullscreen) {
-    (element as any).webkitRequestFullscreen();
-  }
 }
 
 // function poseLikeGrid(array: THREE.Object3D[], breakpoint: number, distance: number) {
